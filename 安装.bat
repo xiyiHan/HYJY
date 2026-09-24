@@ -108,6 +108,18 @@ if not exist "config.local.yaml" (
 )
 echo.
 
+REM ---------- 6. 安装提交前安全检查钩子 ----------
+REM .git/hooks 不进版本库，换一台机器克隆下来钩子不会自动出现，
+REM 因此每次部署都要装一次。它用于阻止录音与密钥被误提交。
+if exist ".git\hooks" (
+    echo   正在安装提交前安全检查钩子……
+    .venv\Scripts\python.exe scripts\check_staged.py --install
+) else (
+    echo   提示：当前不是 Git 仓库，跳过安装安全检查钩子。
+    echo         如需版本管理，请先执行 git init。
+)
+echo.
+
 echo ================================================================
 echo   安装完成
 echo ================================================================
