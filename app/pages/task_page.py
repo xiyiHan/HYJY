@@ -125,9 +125,12 @@ class TaskPage(QWidget):
         pick_row = QHBoxLayout()
         self.btn_pick = QPushButton("选择文件")
         self.btn_pick.clicked.connect(self._pick_files)
+        self.btn_record = QPushButton("录制会议")
+        self.btn_record.clicked.connect(self._open_record_dialog)
         self.btn_clear = QPushButton("清空队列")
         self.btn_clear.clicked.connect(self.clear_files)
         pick_row.addWidget(self.btn_pick)
+        pick_row.addWidget(self.btn_record)
         pick_row.addWidget(self.btn_clear)
         pick_row.addStretch(1)
         self.lbl_queue = QLabel("队列为空")
@@ -213,6 +216,23 @@ class TaskPage(QWidget):
         if files:
             self.add_files(files)
 
+    def _open_record_dialog(self) -> None:
+        """打开录音对话框，录完自动加入队列。"""
+        from mmtools.config import Config
+
+        from .record_dialog import RecordDialog
+
+        try:
+            cfg = Config.load()
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.critical(self, "配置读取失败", str(exc))
+            return
+
+        dialog = RecordDialog(cfg, self)
+        if dialog.exec() == dialog.DialogCode.Accepted and dialog.output_path:
+            self.add_files([str(dialog.output_path)])
+            self.append_log(f"录音已加入队列：{dialog.output_path.name}")
+
     def _refresh_table(self) -> None:
         self.table.setRowCount(len(self._files))
         for row, path in enumerate(self._files):
@@ -284,6 +304,7 @@ class TaskPage(QWidget):
     def set_running(self, running: bool) -> None:
         self._running = running
         self.btn_pick.setEnabled(not running)
+        self.btn_record.setEnabled(not running)
         self.btn_clear.setEnabled(not running)
         self.btn_start.setEnabled(not running and bool(self._files))
         self.btn_cancel.setEnabled(running)
