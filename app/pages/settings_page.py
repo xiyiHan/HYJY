@@ -96,7 +96,7 @@ class SettingsPage(QWidget):
         self.cmb_backend.addItems(["funasr", "faster_whisper"])
 
         self.ed_hotword = QLineEdit()
-        self.ed_hotword.setPlaceholderText("用逗号分隔，例如：某单位,冷链监控,临床用血")
+        self.ed_hotword.setPlaceholderText("用逗号分隔，例如：某单位,冷链监控,业务使用")
         self.lbl_hotword_hint = QLabel(
             "热词要按会议主题定制。主题不匹配的热词等于没填 —— 这是实测教训。"
         )

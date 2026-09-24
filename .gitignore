@@ -75,3 +75,6 @@ $RECYCLE.BIN/
 *.rej
 _sysinfo.py
 _probe.*
+
+# 业务信息脱敏规则：内含真实单位名与项目名，绝不入库
+scripts/sanitize_terms.local.json
