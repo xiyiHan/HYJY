@@ -1,0 +1,12 @@
+# 核心依赖 —— 必需，体积很小
+PyYAML>=6.0
+requests>=2.31
+
+# Word 纪要导出（原生实现，无需 pandoc，可精确控制中文字体）
+python-docx>=1.1.0
+
+# 图形界面。
+# 只装 Essentials 而非 PySide6 元包：元包会连带 WebEngine、3D、Charts 等
+# 一大堆本工具用不到的组件，体积翻倍。界面只用 QtCore / QtGui / QtWidgets，
+# 全部包含在 Essentials 中。
+PySide6-Essentials>=6.6.0

@@ -1,0 +1,16 @@
+# 转写引擎（备选）：faster-whisper
+#
+# 本机为 4 核低压 CPU，建议至少从 small 起步。
+# 实测 small 转写 6 秒音频耗时 28 秒，但中文专有名词准确率低于 FunASR。
+#
+# 切换方式：把 config.yaml 的 transcription.backend 改为 faster_whisper
+#
+# 【重要】模型需从 HuggingFace 下载，而本机实测直连 huggingface.co 不通。
+# 必须在 config.yaml 中配置可用镜像：
+#     transcription:
+#       faster_whisper:
+#         hf_endpoint: "https://hf-mirror.com"
+# 程序会逐文件下载到 D 盘的 models/faster-whisper/<规格>/ 目录，
+# 不走 huggingface_hub 缓存（Windows 无符号链接权限时该缓存会产生残缺文件）。
+
+faster-whisper>=1.0.0

@@ -1,0 +1,18 @@
+# 转写引擎（当前选用）：阿里 FunASR
+# 中文专优，自带 VAD 切分、标点恢复与说话人分离
+#
+# 注意：torch 会占用约 2-3 GB 磁盘，模型首次使用时再下载约 1 GB。
+# 本机 C 盘空间紧张，务必先设置缓存与临时目录到 D 盘再安装，例如：
+#   set PIP_CACHE_DIR=D:\workbuddy-test\meeting-minutes\.cache\pip
+#   set TMP=D:\workbuddy-test\meeting-minutes\.cache\tmp
+#
+# 若只需 CPU 版本，可用官方源减小下载体积：
+#   pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+
+funasr>=1.1.0
+modelscope>=1.15.0
+torch>=2.2.0
+torchaudio>=2.2.0
+
+# 音频时长探测（可选，缺失时不影响主流程）
+soundfile>=0.12.0

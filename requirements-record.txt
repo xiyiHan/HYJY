@@ -1,0 +1,8 @@
+# 录音模块 —— 需要录制系统音频（会议对方）时安装
+#
+# pyaudiowpatch 是 PyAudio 的 Windows WASAPI loopback 分支。
+# 普通 pyaudio 无法录制系统声音，必须用这个。
+# 注意：安装 pyaudiowpatch 前请先卸载普通 pyaudio，两者会冲突。
+
+pyaudiowpatch>=0.2.12.7
+numpy>=1.26.0

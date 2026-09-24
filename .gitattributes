@@ -1,0 +1,25 @@
+# 统一换行符，避免 Windows 与 Linux 之间产生整文件级的伪差异
+* text=auto eol=lf
+
+# Windows 批处理必须用 CRLF，否则可能无法执行
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# 二进制文件不做换行符转换，也不参与文本差异比较
+*.docx binary
+*.xlsx binary
+*.pptx binary
+*.pdf binary
+*.png binary
+*.jpg binary
+*.ico binary
+*.wav binary
+*.m4a binary
+*.mp3 binary
+*.bin binary
+*.pt binary
+*.onnx binary
+
+# 锁定文件在 diff 中不显示，减少噪音
+requirements*.txt text
+*.lock binary

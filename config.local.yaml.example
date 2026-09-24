@@ -1,0 +1,45 @@
+# 本地配置覆盖文件 —— 复制为 config.local.yaml 后填写
+#
+# 本文件用于覆盖 config.yaml 中的任意配置项，并集中存放 API Key 的取得方式。
+# config.local.yaml 已在 .gitignore 中排除，不会被提交。
+#
+# 【推荐做法】指向密钥文件，密钥本体不必放进项目目录。
+# 这样既保持你原有的密钥集中管理习惯，也避免密钥被误提交或散落多处。
+#
+# 用法：把下面内容复制到同目录的 config.local.yaml，按需修改。
+
+providers:
+  deepseek:
+    # 方式一（推荐）：从密钥文件读取。取该文件第一行非空内容作为密钥。
+    api_key_file: "D:/软件/API-KEY/API-DeepSeek/你的密钥文件.txt"
+
+    # 方式二：直接写密钥（次选，密钥会落在项目目录内）
+    # api_key: "sk-xxxxxxxxxxxxxxxx"
+
+    # 可选：临时换用其他模型
+    # model: "deepseek-reasoner"
+
+  # 如需改用其他平台，同时把下面的 llm.provider 改掉
+  # volcengine:
+  #   api_key_file: "D:/软件/API-KEY/API-火山方舟/密钥.txt"
+  #   model: "ep-20260xxxxx-xxxxx"   # 方舟需填推理接入点 ID
+
+# 覆盖当前使用的平台
+# llm:
+#   provider: "deepseek"
+
+# 若项目名、单位名识别不准，填入热词可显著改善转写准确率
+# transcription:
+#   funasr:
+#     hotword: "国研科技,政务信息化,监理,承建单位,初验,终验"
+
+# 若处于单位内网或使用了抓包代理导致 SSL 校验失败
+# llm:
+#   verify_ssl: false
+
+# Word 纪要排版：默认小四仿宋。若需严格对齐公文标准（三号仿宋_GB2312）
+# output:
+#   docx:
+#     body_font: "仿宋_GB2312"
+#     body_size_pt: 16
+#     line_spacing_pt: 28
