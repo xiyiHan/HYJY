@@ -66,18 +66,23 @@ ALLOWLIST = (
 
 
 def staged_files() -> list[str]:
+    """列出暂存区中的文件。
+
+    必须用 -z 取 NUL 分隔的原始路径。git 默认会把含中文等非 ASCII 字符的
+    路径转义成八进制并加引号（core.quotePath），按行解析会得到
+    `"docs/\\347\\225..."` 这样的字符串 —— 于是中文名的文件和目录
+    全部匹配不上禁止规则，安全检查形同虚设。实测踩过这个坑。
+    """
     result = subprocess.run(
-        ["git", "diff", "--cached", "--name-only", "--diff-filter=ACMR"],
+        ["git", "diff", "--cached", "--name-only", "--diff-filter=ACMR", "-z"],
         cwd=ROOT,
         capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="ignore",
     )
     if result.returncode != 0:
         print("无法读取暂存区，请确认当前目录是 Git 仓库。")
         sys.exit(2)
-    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    raw = result.stdout.decode("utf-8", errors="surrogateescape")
+    return [name for name in raw.split("\0") if name.strip()]
 
 
 def check_paths(files: list[str]) -> list[str]:

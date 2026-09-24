@@ -203,10 +203,10 @@ python mm.py glossary --test workspace\transcript\xxx.transcript.md
 ```bat
 python mm.py run 会议录音.wav ^
   --form "F:\项目用表（新）\新模板-标准化-20230802\监理文档模板\建设项目监理文档模板\02会议纪要.docx" ^
-  --project "大同一张网信息化建设项目" ^
-  --owner-unit "大同市卫生健康委员会" ^
+  --project "某某市政务信息化建设项目" ^
+  --owner-unit "某某市卫生健康委员会" ^
   --builder-unit "某某科技有限公司" ^
-  --supervisor-unit "国研咨询" ^
+  --supervisor-unit "某某咨询" ^
   --meeting-no "第3次"
 ```
 
@@ -307,7 +307,7 @@ python mm.py run 录音.wav --backend faster_whisper
 ```yaml
 transcription:
   funasr:
-    hotword: "国研科技,信息化工程监理,总监理工程师,监理通知单,初步验收,最终验收,竣工验收,隐蔽工程,综合布线,桥架,弱电井,核心交换机,网络数字教学,建设单位,承建单位,监理单位"
+    hotword: "某某科技,信息化工程监理,总监理工程师,监理通知单,初步验收,最终验收,竣工验收,隐蔽工程,综合布线,桥架,弱电井,核心交换机,业务系统,建设单位,承建单位,监理单位"
 ```
 
 可用逗号、顿号或空格分隔，程序会自动转换引擎要求的格式并去重。

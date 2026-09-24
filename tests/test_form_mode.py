@@ -207,7 +207,7 @@ def _():
     out.parent.mkdir(parents=True, exist_ok=True)
 
     data = {
-        "project": "大同一张网信息化建设项目",
+        "project": "某某市政务信息化建设项目",
         "meeting_no": "第3次",
         "meeting_type": "例会",
         "topic": "监理例会",
@@ -216,15 +216,15 @@ def _():
         "host": "张工",
         "recorder": "李工",
         "publish_date": "2026年1月14日",
-        "owner_unit": "大同市卫生健康委员会",
+        "owner_unit": "某某市卫生健康委员会",
         "builder_unit": "某某科技有限公司",
-        "supervisor_unit": "国研咨询",
+        "supervisor_unit": "某某咨询",
         "signatories": {
             "建设单位": {"rep": "王主任", "date": "2026年1月15日"},
             "承建单位": {"rep": "赵经理", "date": "2026年1月15日"},
             "监理单位": {"rep": "张工", "date": "2026年1月15日"},
         },
-        "intro": "2026年1月14日上午，大同市卫生健康委员会组织召开了大同一张网信息化建设项目第3次监理例会，会议主要围绕上阶段建设进度与存在问题展开讨论。",
+        "intro": "2026年1月14日上午，某某市卫生健康委员会组织召开了某某市政务信息化建设项目第3次监理例会，会议主要围绕上阶段建设进度与存在问题展开讨论。",
         "items": ["承建单位于1月20日前提交设备到货计划。", "监理单位本周内完成隐蔽工程影像资料复核。", "设计单位1月18日前出具弱电井变更单。"],
         "attendees": [
             {"unit": "建设单位", "people": ["王主任"]},
@@ -275,9 +275,9 @@ def _():
 
         # 单位名称标签被替换为实际单位全称
         labels = [unique(r.cells)[0].text.strip() for r in table.rows]
-        assert "大同市卫生健康委员会" in labels, f"建设单位名称未替换：{labels[8:12]}"
+        assert "某某市卫生健康委员会" in labels, f"建设单位名称未替换：{labels[8:12]}"
         assert "某某科技有限公司" in labels
-        assert "国研咨询" in labels
+        assert "某某咨询" in labels
 
         # 复选框：例会应被打勾（Wingdings 00FE）
         from docx.oxml.ns import qn
@@ -295,7 +295,7 @@ def _():
 
         # 正文
         body = "\n".join(p.text for p in doc.paragraphs)
-        assert "大同一张网信息化建设项目" in body, "项目名称未写入"
+        assert "某某市政务信息化建设项目" in body, "项目名称未写入"
         assert "（第3次）" in body, "会议次数未写入"
         assert "2026年1月14日上午" in body, "引言段未写入"
         assert "1、承建单位于1月20日前提交设备到货计划。" in body, "条目 1 未写入"

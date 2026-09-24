@@ -55,7 +55,7 @@ def _app():
 
 
 def _sample_audio() -> Path | None:
-    for name in ("大同市血站录音-20260114.wav", "测试语音.wav"):
+    for name in ("示例会议录音.wav", "测试语音.wav"):
         p = ROOT / "workspace" / "audio" / name
         if p.exists():
             return p
