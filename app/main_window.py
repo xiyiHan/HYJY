@@ -1,17 +1,20 @@
-"""主窗口：左侧导航 + 页面容器 + 任务编排。"""
+"""主窗口：左侧导航 + 三步工作流。
+
+界面按用户的实际工作顺序组织：先录、再转写、最后生成纪要。
+三步之间通过「送到下一步」衔接，但也可以单独使用 ——
+例如手上已有录音文件时直接进第二步，已有文字稿时直接进第三步。
+"""
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QListWidget,
     QListWidgetItem,
     QMainWindow,
-    QMessageBox,
     QStackedWidget,
     QWidget,
 )
@@ -19,10 +22,18 @@ from PySide6.QtWidgets import (
 from mmtools.config import Config
 
 from .pages.help_page import HelpPage
-from .pages.result_page import ResultPage
+from .pages.library_page import LibraryPage
+from .pages.minutes_page import MinutesPage
+from .pages.record_page import RecordPage
 from .pages.settings_page import SettingsPage
-from .pages.task_page import TaskPage
-from .worker import ProcessWorker
+from .pages.transcribe_page import TranscribePage
+
+PAGE_RECORD = 0
+PAGE_TRANSCRIBE = 1
+PAGE_MINUTES = 2
+PAGE_LIBRARY = 3
+PAGE_SETTINGS = 4
+PAGE_HELP = 5
 
 
 class MainWindow(QMainWindow):
@@ -31,12 +42,10 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("会议纪要工具")
-        self.resize(1000, 700)
-        self.setMinimumSize(820, 560)
+        self.resize(1060, 740)
+        self.setMinimumSize(880, 600)
 
         self.cfg = Config.load()
-        self.worker: ProcessWorker | None = None
-
         self._build_ui()
         self._refresh_status_bar()
 
@@ -51,24 +60,42 @@ class MainWindow(QMainWindow):
 
         self.nav = QListWidget()
         self.nav.setObjectName("navList")
-        for label in ("任务", "结果", "设置", "帮助"):
+        for label in ("① 录制", "② 转写", "③ 纪要", "文件库", "设置", "帮助"):
             self.nav.addItem(QListWidgetItem(label))
-        self.nav.setCurrentRow(0)
+        self.nav.setCurrentRow(PAGE_RECORD)
         self.nav.currentRowChanged.connect(self._on_nav_changed)
         layout.addWidget(self.nav)
 
         self.stack = QStackedWidget()
         layout.addWidget(self.stack, 1)
 
-        self.task_page = TaskPage()
-        self.result_page = ResultPage()
+        self.record_page = RecordPage()
+        self.transcribe_page = TranscribePage()
+        self.minutes_page = MinutesPage()
+        self.library_page = LibraryPage()
         self.settings_page = SettingsPage()
         self.help_page = HelpPage()
-        for page in (self.task_page, self.result_page, self.settings_page, self.help_page):
+        for page in (
+            self.record_page,
+            self.transcribe_page,
+            self.minutes_page,
+            self.library_page,
+            self.settings_page,
+            self.help_page,
+        ):
             self.stack.addWidget(page)
 
-        self.task_page.start_requested.connect(self.start_processing)
-        self.task_page.cancel_requested.connect(self.cancel_processing)
+        # 三步之间的衔接
+        self.record_page.send_to_next.connect(self._record_to_transcribe)
+        self.transcribe_page.go_next_requested.connect(self._transcribe_to_minutes)
+
+        # 文件库可以直接把文件送进对应步骤
+        self.library_page.send_to_transcribe.connect(self._library_to_transcribe)
+        self.library_page.send_to_minutes.connect(self._library_to_minutes)
+
+        # 任意一步完成后刷新文件库与状态栏
+        self.transcribe_page.go_next_requested.connect(lambda *_: self.library_page.reload())
+        self.minutes_page.go_next_requested.connect(lambda *_: self.library_page.reload())
 
         self._build_status_bar()
 
@@ -83,130 +110,114 @@ class MainWindow(QMainWindow):
             engine = self.cfg.backend_name
             _, prov = self.cfg.provider()
             has_key = bool(self.cfg.api_key())
-            key_state = "已配置" if has_key else "未配置密钥"
-            self.lbl_env.setText(
-                f"转写：{engine}    纪要：{prov.get('label', '')}（{key_state}）"
-            )
-            if not has_key:
-                self.lbl_env.setObjectName("warn")
-            else:
-                self.lbl_env.setObjectName("muted")
+
+            parts = [
+                f"① 录音：{'就绪' if self._recorder_ready() else '不可用'}",
+                f"② 转写：{engine}",
+                f"③ 纪要：{prov.get('label', '')}（{'已配置密钥' if has_key else '未配置密钥'}）",
+            ]
+            self.lbl_env.setText("    ".join(parts))
+            self.lbl_env.setObjectName("muted" if has_key else "warn")
             self.lbl_env.style().unpolish(self.lbl_env)
             self.lbl_env.style().polish(self.lbl_env)
         except Exception as exc:  # noqa: BLE001
             self.lbl_env.setText(f"配置异常：{exc}")
 
+    def _recorder_ready(self) -> bool:
+        try:
+            from mmtools.recorder import check_recording_ready
+
+            ok, _ = check_recording_ready()
+            return ok
+        except Exception:
+            return False
+
     def _on_nav_changed(self, row: int) -> None:
         self.stack.setCurrentIndex(row)
-        if row == 2:  # 设置页每次进入都重新载入，避免显示过期值
+        page = self.stack.currentWidget()
+        # 这几页每次进入都重新读配置与刷新，避免显示过期状态
+        if row == PAGE_SETTINGS:
             self.settings_page.cfg = Config.load()
             self.settings_page.load_values()
-        if row in (2, 3):
+        elif row == PAGE_LIBRARY:
+            self.library_page.reload()
+        elif row == PAGE_HELP:
             self._refresh_status_bar()
+        if hasattr(page, "refresh_environment"):
+            try:
+                page.refresh_environment()
+            except Exception:
+                pass
+        if hasattr(page, "reload_files"):
+            try:
+                page.reload_files()
+            except Exception:
+                pass
 
-    # ---------------------------------------------------------------- 处理
+    # ---------------------------------------------------------------- 衔接
 
-    def start_processing(self, paths: list[str]) -> None:
-        if self.worker is not None and self.worker.isRunning():
-            QMessageBox.information(self, "提示", "已有任务在处理中。")
+    def _record_to_transcribe(self, paths: list[str]) -> None:
+        added = self.transcribe_page.add_files(paths)
+        self.nav.setCurrentRow(PAGE_TRANSCRIBE)
+        self.transcribe_page.append_log(f"已从「录制」页接收 {added} 个文件")
+
+    def _library_to_transcribe(self, paths: list[str]) -> None:
+        added = self.transcribe_page.add_files(paths)
+        self.nav.setCurrentRow(PAGE_TRANSCRIBE)
+        self.transcribe_page.append_log(f"已从文件库接收 {added} 个录音文件")
+
+    def _library_to_minutes(self, paths: list[str]) -> None:
+        added = self.minutes_page.add_files(paths)
+        self.nav.setCurrentRow(PAGE_MINUTES)
+        self.minutes_page.append_log(f"已从文件库接收 {added} 份文字稿")
+
+    def _transcribe_to_minutes(self, outputs: list[str]) -> None:
+        transcripts = [p for p in outputs if str(p).endswith((".transcript.md", ".md"))]
+        if not transcripts:
             return
-
-        try:
-            self.cfg = Config.load()
-        except Exception as exc:  # noqa: BLE001
-            QMessageBox.critical(self, "配置错误", str(exc))
-            return
-
-        if not self.cfg.api_key():
-            answer = QMessageBox.question(
-                self,
-                "尚未配置密钥",
-                "还没有配置云端平台的 API Key，无法生成会议纪要。\n\n"
-                "是否只做转写（先得到文字稿，稍后再生成纪要）？",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            )
-            if answer != QMessageBox.StandardButton.Yes:
-                return
-            skip_summary = True
-        else:
-            skip_summary = False
-
-        template_value = (self.cfg.get("template", "path") or "").strip()
-        form_template = Path(template_value) if template_value else None
-        if form_template is not None and not form_template.exists():
-            QMessageBox.warning(
-                self, "模板不存在",
-                f"配置中的模板文件不存在：\n{form_template}\n\n将改用通用排版生成。",
-            )
-            form_template = None
-
-        known = dict(self.cfg.get("template", "known") or {})
-
-        self.task_page.append_log("")
-        if form_template:
-            self.task_page.append_log(f"将按模板生成：{form_template.name}")
-        else:
-            self.task_page.append_log("未配置模板，将生成通用排版的 Word 纪要")
-
-        self.worker = ProcessWorker(
-            cfg=self.cfg,
-            audios=[Path(p) for p in paths],
-            form_template=form_template,
-            known=known,
-            skip_summary=skip_summary,
-            parent=self,
+        self.minutes_page.add_files(transcripts)
+        self.minutes_page.append_log(
+            f"转写完成，{len(transcripts)} 份文字稿已就绪，可直接生成纪要。"
         )
-        self.worker.log_line.connect(self.task_page.append_log)
-        self.worker.progress.connect(self.task_page.on_progress)
-        self.worker.succeeded.connect(self._on_succeeded)
-        self.worker.failed.connect(self._on_failed)
-        self.worker.cancelled.connect(self._on_cancelled)
-        self.worker.finished.connect(self._on_worker_finished)
-
-        self.task_page.set_running(True)
-        self.worker.start()
-
-    def cancel_processing(self) -> None:
-        if self.worker is not None and self.worker.isRunning():
-            self.worker.cancel()
-
-    def _on_succeeded(self, results: list) -> None:
-        self.result_page.add_results(results)
-        self.task_page.set_running(False)
-        self.task_page.append_log("")
-        self.task_page.append_log("全部完成。")
-        self.nav.setCurrentRow(1)
-
-    def _on_failed(self, message: str) -> None:
-        self.task_page.set_running(False)
-        self.task_page.append_log("")
-        self.task_page.append_log(f"处理失败：{message}")
-        QMessageBox.critical(self, "处理失败", message)
-
-    def _on_cancelled(self) -> None:
-        self.task_page.set_running(False)
-        self.task_page.append_log("")
-        self.task_page.append_log("任务已取消，已完成的文字稿与纪要会保留。")
-
-    def _on_worker_finished(self) -> None:
-        self.worker = None
-        self._refresh_status_bar()
+        self.nav.setCurrentRow(PAGE_MINUTES)
 
     # ---------------------------------------------------------------- 关闭
 
     def closeEvent(self, event) -> None:  # noqa: N802
-        if self.worker is not None and self.worker.isRunning():
-            answer = QMessageBox.question(
-                self,
-                "任务进行中",
-                "正在处理录音，现在退出会中断处理。\n\n"
-                "已完成的文件会保留，剩余文件需要重新开始。确定退出吗？",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No,
-            )
-            if answer != QMessageBox.StandardButton.Yes:
-                event.ignore()
-                return
-            self.worker.cancel()
-            self.worker.wait(3000)
+        busy: list[str] = []
+        worker = getattr(self.record_page, "worker", None)
+        if worker is not None and worker.isRunning():
+            busy.append("录音")
+        for page in (self.transcribe_page, self.minutes_page):
+            w = getattr(page, "_worker", None)
+            if w is not None and w.isRunning():
+                busy.append(page.step_title)
+
+        if not busy:
+            event.accept()
+            return
+
+        from PySide6.QtWidgets import QMessageBox
+
+        answer = QMessageBox.question(
+            self,
+            "任务进行中",
+            f"以下任务正在运行：{'、'.join(busy)}。\n\n"
+            f"现在退出会中断它们。已完成的产物会保留，未完成的需要重新开始。\n"
+            f"确定退出吗？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            event.ignore()
+            return
+
+        if worker is not None and worker.isRunning():
+            worker.stop()
+            worker.wait(5000)
+        for page in (self.transcribe_page, self.minutes_page):
+            w = getattr(page, "_worker", None)
+            if w is not None and w.isRunning():
+                w.cancel()
+                w.wait(5000)
         event.accept()

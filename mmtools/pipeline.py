@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import prompts
@@ -506,9 +506,12 @@ def run_pipeline(
     cfg.ensure_dirs()
     prepare_runtime_env(cfg)
 
-    form_mode = form_template is not None or (
-        str(cfg.get("output", "template", default="")).strip() == "supervision_form"
-    )
+    try:
+        form_template = resolve_form_template(cfg, form_template)
+    except FileNotFoundError as exc:
+        progress.log(f"模板不可用，改用通用排版：{exc}")
+        form_template = None
+    form_mode = form_template is not None
 
     if isinstance(audio, (str, Path)):
         audios = [Path(audio)]
@@ -636,7 +639,228 @@ def run_pipeline(
     return results
 
 
-_STAMP_RE = __import__("re").compile(r"^\*\*\[(\d{1,2}):(\d{2})(?::(\d{2}))?\]\*\*\s*(?:\*\*(.+?)\*\*)?\s*$")
+def resolve_form_template(
+    cfg: Config, explicit: Path | str | None = None
+) -> Path | None:
+    """决定是否走模板填充模式，返回模板路径或 None。
+
+    判定顺序：显式传入的路径 > template.enabled 开关 > output.template 取值。
+    逻辑集中在这里，避免命令行与图形界面对"什么算启用了模板"给出不同答案。
+    """
+    if explicit not in (None, ""):
+        p = Path(explicit)
+        if not p.exists():
+            raise FileNotFoundError(f"模板文件不存在：{p}")
+        return p
+
+    enabled = bool(cfg.get("template", "enabled", default=False))
+    form_mode = str(cfg.get("output", "template", default="")).strip() == "supervision_form"
+    if not (enabled or form_mode):
+        return None
+
+    configured = (cfg.get("template", "path") or "").strip()
+    if not configured:
+        return None
+    p = Path(configured)
+    if not p.exists():
+        raise FileNotFoundError(f"配置中的模板文件不存在：{p}")
+    return p
+
+
+@dataclass
+class StepOutcome:
+    """分步执行时，单个输入文件的处理结果。"""
+
+    source: Path
+    outputs: list[Path] = field(default_factory=list)
+    ok: bool = True
+    error: str = ""
+    info: dict = field(default_factory=dict)
+
+    @property
+    def primary(self) -> Path | None:
+        return self.outputs[0] if self.outputs else None
+
+
+def run_transcribe_step(
+    cfg: Config,
+    audios,
+    backend: str | None = None,
+    progress: Progress | None = None,
+    verbose: bool = False,
+) -> list[StepOutcome]:
+    """第二步：录音转文字。音频 → 文字稿。
+
+    只依赖本地能力，不需要联网。批量时转写模型只加载一次 ——
+    本机实测模型加载约 100 秒，逐个文件重复加载是纯粹的浪费。
+
+    单个文件失败不会中断整批：收集错误继续处理后面的文件，
+    最后把成功与失败一并返回，由界面分别展示。
+    """
+    progress = progress or Progress(echo=verbose)
+    cfg.ensure_dirs()
+    prepare_runtime_env(cfg)
+
+    items = [Path(a) for a in (audios if isinstance(audios, (list, tuple)) else [audios])]
+    if not items:
+        raise ValueError("未提供任何音频文件。")
+
+    transcriber = get_transcriber(cfg, backend)
+    outcomes: list[StepOutcome] = []
+
+    progress.report(
+        "start",
+        f"开始转写 {len(items)} 个文件",
+        total=len(items),
+        current=0,
+        engine=transcriber.describe(),
+    )
+    progress.log(f"转写引擎：{transcriber.describe()}")
+    progress.log("")
+
+    try:
+        for idx, item in enumerate(items, start=1):
+            progress.check_cancel()
+            stem = default_stem(item)
+            progress.log(f"--- [{idx}/{len(items)}] {item.name} ---")
+            progress.report(
+                "file_start", f"正在转写 {item.name}",
+                current=idx, total=len(items), file=str(item), stem=stem,
+            )
+            try:
+                result, target = step_transcribe(
+                    cfg, item, stem=stem, backend=backend,
+                    verbose=verbose, transcriber=transcriber, progress=progress,
+                )
+                outcomes.append(
+                    StepOutcome(
+                        source=item,
+                        outputs=[target],
+                        info={
+                            "segments": len(result.segments),
+                            "duration": result.duration,
+                            "elapsed": result.elapsed,
+                            "speakers": len(result.speakers),
+                        },
+                    )
+                )
+                progress.report(
+                    "file_done", f"{item.name} 转写完成",
+                    current=idx, total=len(items), transcript=str(target),
+                )
+            except Exception as exc:  # noqa: BLE001
+                outcomes.append(
+                    StepOutcome(source=item, outputs=[], ok=False, error=str(exc))
+                )
+                progress.log(f"       转写失败：{exc}")
+                progress.report(
+                    "file_failed", f"{item.name} 转写失败：{exc}",
+                    current=idx, total=len(items), error=str(exc),
+                )
+            progress.log("")
+    finally:
+        transcriber.release()
+
+    succeeded = sum(1 for o in outcomes if o.ok)
+    progress.report(
+        "all_done",
+        f"转写完成：成功 {succeeded} 个，失败 {len(outcomes) - succeeded} 个",
+        total=len(items), current=len(outcomes), succeeded=succeeded,
+    )
+    return outcomes
+
+
+def run_summarize_step(
+    cfg: Config,
+    transcripts,
+    provider: str | None = None,
+    known: dict | None = None,
+    form_template: Path | None = None,
+    dry_run: bool = False,
+    progress: Progress | None = None,
+    verbose: bool = False,
+) -> list[StepOutcome]:
+    """第三步：文字稿生成会议纪要。文字稿 → 会议文件。
+
+    这一步需要联网与 API Key。与转写分开之后，可以在没有网络的环境里
+    先完成录音与转写，之后再联网生成纪要；也可以对同一份文字稿反复重跑
+    （换模型、改提示词、补全已知信息），而不必重新转写。
+    """
+    progress = progress or Progress(echo=verbose)
+    cfg.ensure_dirs()
+
+    items = [
+        Path(t) for t in (transcripts if isinstance(transcripts, (list, tuple)) else [transcripts])
+    ]
+    if not items:
+        raise ValueError("未提供任何文字稿。")
+
+    try:
+        template_path = resolve_form_template(cfg, form_template)
+    except FileNotFoundError as exc:
+        # 模板丢了不该让整批任务失败，退回通用排版并明确告知
+        progress.log(f"       模板不可用，本次改用通用排版：{exc}")
+        template_path = None
+    form_mode = template_path is not None
+
+    outcomes: list[StepOutcome] = []
+    progress.report("start", f"开始生成 {len(items)} 份纪要", total=len(items), current=0)
+    progress.log("")
+    if form_mode:
+        progress.log(
+            f"纪要模式：填充单位模板"
+            f"{'（' + template_path.name + '）' if template_path else ''}"
+        )
+        progress.log("")
+
+    for idx, item in enumerate(items, start=1):
+        progress.check_cancel()
+        stem = item.name.replace(".transcript.md", "")
+        progress.log(f"--- [{idx}/{len(items)}] {item.name} ---")
+        progress.report(
+            "file_start", f"正在生成 {item.name} 的纪要",
+            current=idx, total=len(items), file=str(item), stem=stem,
+        )
+        try:
+            target, stats = summarize_existing(
+                cfg, item, provider=provider, verbose=verbose, dry_run=dry_run,
+                form_template=template_path if form_mode else None,
+                known=known, progress=progress,
+            )
+            outputs = [target]
+            if target.suffix == ".docx":
+                md = target.with_suffix(".md")
+                js = target.with_suffix(".json")
+                outputs += [p for p in (md, js) if p.exists()]
+            outcomes.append(
+                StepOutcome(source=item, outputs=outputs, info=dict(stats or {}))
+            )
+            progress.report(
+                "file_done", f"{item.name} 纪要完成",
+                current=idx, total=len(items),
+                minutes=str(target), outputs=[str(p) for p in outputs],
+            )
+        except Exception as exc:  # noqa: BLE001
+            outcomes.append(StepOutcome(source=item, outputs=[], ok=False, error=str(exc)))
+            progress.log(f"       生成失败：{exc}")
+            progress.report(
+                "file_failed", f"{item.name} 生成失败：{exc}",
+                current=idx, total=len(items), error=str(exc),
+            )
+        progress.log("")
+
+    succeeded = sum(1 for o in outcomes if o.ok)
+    progress.report(
+        "all_done",
+        f"纪要生成完成：成功 {succeeded} 份，失败 {len(outcomes) - succeeded} 份",
+        total=len(items), current=len(outcomes), succeeded=succeeded,
+    )
+    return outcomes
+
+
+_STAMP_RE = __import__("re").compile(
+    r"^\*\*\[(\d{1,2}):(\d{2})(?::(\d{2}))?\]\*\*\s*(?:\*\*(.+?)\*\*)?\s*$"
+)
 
 
 def load_transcript(path: Path) -> TranscriptResult:
@@ -723,8 +947,14 @@ def summarize_existing(
     dry_run: bool = False,
     form_template: Path | None = None,
     known: dict | None = None,
+    progress: Progress | None = None,
 ) -> tuple[Path, dict]:
-    """对已生成的文字稿重跑纪要，不重新转写。支持模板填充模式。"""
+    """对已生成的文字稿重跑纪要，不重新转写。支持模板填充模式。
+
+    转写一次可能要几十分钟，而纪要部分经常需要反复调整（换模型、改提示词、
+    补全已知信息）。把这两件事解耦，重跑纪要就不必再付转写的代价。
+    """
+    progress = progress or Progress(echo=verbose)
     transcript_path = Path(transcript_path)
     if not transcript_path.exists():
         raise FileNotFoundError(f"文字稿不存在：{transcript_path}")
@@ -733,11 +963,14 @@ def summarize_existing(
     stem = transcript_path.name.replace(".transcript.md", "")
     result = load_transcript(transcript_path)
 
-    if form_template is not None or \
-            str(cfg.get("output", "template", default="")).strip() == "supervision_form":
+    # 模板模式的判定交给调用方（run_summarize_step / CLI 都已用
+    # resolve_form_template 解析过），这里只按传入的路径决定走哪条分支，
+    # 避免两处判定逻辑不一致。
+    if form_template is not None:
         return step_summarize_form(
             cfg, result, stem=stem, provider=provider, verbose=verbose,
             dry_run=dry_run, template_path=form_template, known=known,
+            progress=progress,
         )
 
     text = transcript_path.read_text(encoding="utf-8")
@@ -745,16 +978,15 @@ def summarize_existing(
 
     if dry_run:
         target = build_payload_preview(cfg, body, stem, title, notes, provider)
-        if verbose:
-            llm = CloudLLM(cfg, provider)
-            print(f"[纪要] 已跳过实际调用（--dry-run），目标平台 {llm.describe()}")
-            print(f"       出网内容预览已保存：{target.name}")
+        llm = CloudLLM(cfg, provider)
+        progress.log(f"[纪要] 已跳过实际调用（--dry-run），目标平台 {llm.describe()}")
+        progress.log(f"       出网内容预览已保存：{target.name}")
         return target, {"dry_run": True, "provider": provider or cfg.get("llm", "provider")}
 
     llm = CloudLLM(cfg, provider)
-    if verbose:
-        print(f"[纪要] 生成中 —— 平台 {llm.describe()}")
-        print(f"       数据合规提示：{llm.compliance}")
+    progress.log(f"[纪要] 生成中 —— 平台 {llm.describe()}")
+    progress.log(f"       数据合规提示：{llm.compliance}")
+    progress.report("summarize", "生成纪要中", provider=llm.label, model=llm.model)
 
     minutes, stats = llm.summarize(body, meeting_title=title, extra_notes=notes)
 
@@ -762,8 +994,8 @@ def summarize_existing(
     out_dir.mkdir(parents=True, exist_ok=True)
     target = out_dir / f"{stem}.minutes.md"
     target.write_text(minutes.strip() + "\n", encoding="utf-8")
-    if verbose:
-        print(f"       纪要已保存：{target}")
+    progress.log(f"       纪要已保存：{target.name}")
+    progress.report("summarize_done", "纪要已生成", minutes=str(target))
     return target, stats
 
 

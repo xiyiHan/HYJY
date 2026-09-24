@@ -104,6 +104,92 @@ class ProcessWorker(QThread):
         self.succeeded.emit(results)
 
 
+class _StepWorkerBase(QThread):
+    """分步任务的公共实现：把一个操作套用到一批文件上。
+
+    「转写」与「纪要」两步的区别只在调用的业务函数不同，其余（进度回报、
+    取消、错误收集）完全一致，因此抽到这里。
+    """
+
+    log_line = Signal(str)
+    progress = Signal(dict)
+    outcomes = Signal(list)
+    failed = Signal(str)
+
+    def __init__(self, cfg: Config, files: list[Path], parent=None):
+        super().__init__(parent)
+        self.cfg = cfg
+        self.files = list(files)
+        self._cancel = threading.Event()
+
+    def cancel(self) -> None:
+        """请求取消。在下一个安全点生效，不是立刻停止。"""
+        self._cancel.set()
+
+    @property
+    def cancel_requested(self) -> bool:
+        return self._cancel.is_set()
+
+    def _make_progress(self) -> Progress:
+        def callback(event: str, payload: dict) -> None:
+            if event == "log":
+                self.log_line.emit(payload.get("message", ""))
+            else:
+                self.progress.emit(payload)
+
+        return Progress(callback=callback, echo=False, cancel_check=self._cancel.is_set)
+
+    def run(self) -> None:  # noqa: D102
+        try:
+            results = self.execute(self._make_progress())
+        except CancelledError:
+            self.outcomes.emit([])
+            return
+        except Exception as exc:  # noqa: BLE001
+            detail = "".join(traceback.format_exception_only(type(exc), exc)).strip()
+            self.failed.emit(detail)
+            return
+        self.outcomes.emit(results)
+
+    def execute(self, progress: Progress) -> list:
+        raise NotImplementedError
+
+
+class TranscribeWorker(_StepWorkerBase):
+    """第二步：录音转文字。纯本地，不需要联网。"""
+
+    backend: str | None = None
+
+    def execute(self, progress: Progress) -> list:  # noqa: D102
+        from mmtools.pipeline import run_transcribe_step
+
+        return run_transcribe_step(
+            self.cfg, self.files, backend=self.backend, progress=progress
+        )
+
+
+class SummarizeWorker(_StepWorkerBase):
+    """第三步：文字稿生成会议纪要。需要联网与 API Key。"""
+
+    provider: str | None = None
+    known: dict | None = None
+    form_template: Path | None = None
+    dry_run: bool = False
+
+    def execute(self, progress: Progress) -> list:  # noqa: D102
+        from mmtools.pipeline import run_summarize_step
+
+        return run_summarize_step(
+            self.cfg,
+            self.files,
+            provider=self.provider,
+            known=self.known,
+            form_template=self.form_template,
+            dry_run=self.dry_run,
+            progress=progress,
+        )
+
+
 class CheckWorker(QThread):
     """在子线程里跑环境自检，避免联网检测时界面卡顿。"""
 
